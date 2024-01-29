@@ -1,0 +1,61 @@
+#!/bin/bash
+set -e # exit if any commands fail like curl or jq
+echo "Running script to get code time..."
+
+# TODOS
+# Loop over authors
+# Take arguments for time scope
+# Support for gitlab & bitbucket api
+
+if [ -d .git ] || git rev-parse --is-inside-work-tree > /dev/null 2>&1; then
+  echo "Current directory is within a Git repository."
+  remote_url=$(git config --get remote.origin.url)
+  # -s .git is used to remove suffix .git
+  REPO_NAME=$(basename -s .git $(git config --get remote.origin.url)) 
+  REPO_OWNER=$(basename $(dirname $(git config --get remote.origin.url)) | awk -F'[:/]' '{print $2}')
+
+  # Iterate through the commits in git log for the specified author
+  git log --pretty=format:"%h|%an|%at|%s" --author="$TARGET_AUTHOR" | while IFS='|' read -r COMMIT_HASH AUTHOR TIMESTAMP COMMIT_MESSAGE; do
+    if [[ $(uname) == "Darwin" ]]; then
+      # macOS syntax
+      COMMIT_TIME=$(date -u -r "$TIMESTAMP" +"%Y-%m-%dT%H:%M:%SZ")
+    else
+      # Linux syntax
+      COMMIT_TIME=$(date -u --date="@$TIMESTAMP" +"%Y-%m-%dT%H:%M:%SZ")
+    fi
+    PR_URL=$(curl -s -H "Authorization: token $GIT_ACCESS_TOKEN" "https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/commits/$COMMIT_HASH/pulls" | jq -r 'if length > 0 then .[0].url else empty end')
+
+    if [ -n "$PR_URL" ]; then
+      # Get pull request creation time
+      PR_CREATED_TIME=$(curl -s -H "Authorization: token $GIT_ACCESS_TOKEN" "$PR_URL" | jq -r '.created_at')
+
+      # Format both timestamps to a consistent format
+      if [[ $(uname) == "Darwin" ]]; then
+        # macOS syntax
+        COMMIT_TIME_FORMATTED=$(date -u -jf "%Y-%m-%dT%H:%M:%SZ" "$COMMIT_TIME" "+%Y-%m-%dT%H:%M:%SZ")
+        PR_CREATED_TIME_FORMATTED=$(date -u -jf "%Y-%m-%dT%H:%M:%SZ" "$PR_CREATED_TIME" "+%Y-%m-%dT%H:%M:%SZ")
+      else
+        # Linux syntax
+        COMMIT_TIME_FORMATTED=$(date -u --date="$COMMIT_TIME" +"%Y-%m-%dT%H:%M:%SZ")
+        PR_CREATED_TIME_FORMATTED=$(date -u --date="$PR_CREATED_TIME" +"%Y-%m-%dT%H:%M:%SZ")
+      fi
+
+      # Calculate time difference in seconds
+      if [[ $(uname) == "Darwin" ]]; then
+        # macOS syntax
+        TIME_DIFF=$(( $(date -jf "%Y-%m-%dT%H:%M:%SZ" "$PR_CREATED_TIME_FORMATTED" +"%s") - $TIMESTAMP ))
+      else
+        # Linux syntax
+        TIME_DIFF=$(( $(date -d "$PR_CREATED_TIME_FORMATTED" +"%s") - $TIMESTAMP ))
+      fi
+
+      # Convert time difference to hours
+      TIME_DIFF_HOURS=$(( $TIME_DIFF / 3600 ))
+
+      echo "Commit: $COMMIT_HASH, Time to PR: $TIME_DIFF_HOURS hours, PR URL: $PR_URL, Commit Time: $COMMIT_TIME_FORMATTED, PR Time: $PR_CREATED_TIME_FORMATTED"
+    fi
+    # Add more actions or commands as needed
+  done
+else
+   echo "Current directory is not within a Git repository." 
+fi
